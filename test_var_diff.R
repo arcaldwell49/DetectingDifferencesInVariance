@@ -1,0 +1,145 @@
+library(simstudy)
+library(skedastic)
+library(car)
+library(metafor)
+gen_id <- defData(varname = "pre", dist = "normal", formula = 100, variance = 20^2,
+                      id = "id")
+gen_id <- defData(gen_id, varname = "t0", dist = "normal", formula = 0,
+                  variance = 1)
+gen_id <- defData(gen_id, varname = "rx", dist = "trtAssign",
+               formula = "1;1")
+gen_id <- defData(gen_id, varname = "post", dist = "normal",
+                  formula = "pre - (5+t0) * rx",
+                  variance = 5)
+set.seed(282721)
+
+dt_id <- genData(10000, gen_id)
+dt_id$delta = dt_id$post - dt_id$pre
+
+
+
+
+# Functions -----
+p_from_z = function(x,
+                    alternative = "two.sided"){
+  if(alternative == "two.sided"){
+    2*pnorm(-abs(unlist(x)))
+  } else  if (alternative  == "greater"){
+    pnorm(x, lower.tail = FALSE)
+  } else if (alternative  == "less"){
+    pnorm(x, lower.tail = TRUE)
+  } else{
+    stop("alternative must be two.sided, greater, or less")
+  }
+  
+}
+
+## tests ------
+# var.test - F-test
+# barlett bartlett.test()
+# levene car::levene
+# fligner-killeen fligner.test()
+# Breusch-Pagan-Koenker
+# glejser (model based)
+glejser.test <- function(model, Z_var, dataset){
+  # model is the lmer object
+  # Z_var is the explanatory variable to regress the abs values on
+  # dataset is the full data
+  
+  ares = auxresponse = abs(residuals(model))
+  n = length(ares)
+  Z = as.matrix(dataset[Z_var])
+  if(length(Z_var == 1)){
+    Z <- cbind(1, Z)
+  }
+  q = ncol(Z)-1
+  auxres <- stats::lm.fit(Z, ares)$residuals
+  #sum_lm <- summary(lm(as.formula(paste0("ares ~ ", Z_var)), data = dataset))
+  sigma_hatsq <- sum(residuals(model)^2)/n
+  teststat <- (sum(auxresponse^2) - n * mean(auxresponse)^2 - 
+                 sum(auxres^2))/(sigma_hatsq * (1 - 2/pi))
+  pval <- stats::pchisq(teststat, df = q, lower.tail = FALSE)
+  
+  statistic = teststat
+  names(statistic) = "Chi-squared"
+  null1 = 0
+  names(null1) = "heteroskedasticity"
+  
+  rval <- list(statistic = statistic,
+               parameter = q,
+               p.value = as.numeric(pval),
+               null.value = null1,
+               alternative = "greater",
+               method = "Glejser Test for Heteroskedasticity",
+               data.name = as.character(model$call)[2])
+  class(rval) <- "htest"
+  return(rval)
+  
+}
+# difference in variance (normal based test)
+diff_var_test = function(sd1, n1,
+                         sd2, n2,
+                         alternative = c("two.sided",
+                                         "greater",
+                                         "less")){
+  alternative = match.arg(alternative)
+  var1 = sd1^2
+  var1_se <- var1*(sqrt(2/(n1 - 1)))
+  var2 = sd2^2
+  var2_se <- var2*(sqrt(2/(n2 - 1)))
+  
+  est_diff <- var1-var2
+  
+  est_diff_SE <- sqrt(var1^2 + var2^2) 
+  teststat <- est_diff/est_diff_SE
+  pvalue = p_from_z(teststat, alternative = alternative)
+}
+# SDir (normal based test from Hopkins variances estimate)
+# ratio of variances (normal based test?) logVR
+
+log_vr_test = function(sd1, n1,
+                       sd2, n2,
+                       alternative = c("two.sided",
+                                       "greater",
+                                       "less")){
+  var1 = sd1^2
+  var1_se <- var1*(sqrt(2/(n1 - 1)))
+  var2 = sd2^2
+  var2_se <- var2*(sqrt(2/(n2 - 1)))
+  yi <- log(sqrt(var1)/sqrt(var2)) + 1/(2 * (n1 - 1)) - 1/(2 * 
+                                                                      (n2 - 1))
+  
+  vi <- 1/(2 * (n1 - 1)) + 1/(2 * (n2 - 1))
+  
+  teststat <- yi/sqrt(vi)
+}
+# coefficient of variation approach
+log_cvr_test = function(sd1, n1, mean1,
+                       sd2, n2, mean2,
+                       alternative = c("two.sided",
+                                       "greater",
+                                       "less")){
+  es_est = metafor::escalc(
+     measure = "CVR",
+     n1i = n1,
+     n2i = n2,
+     sd1i = sd1,
+     sd2i = sd2,
+     m1i = mean1,
+     m2i = mean2,
+  )
+  
+  teststat <- es_est$yi/sqrt(es_est$vi)
+}
+
+
+breusch_pagan(mtcars_lm,
+              auxdesign =  as.matrix(mtcars$wt),
+              koenker = FALSE)
+
+test1=glejser(mtcars_lm,
+              auxdesign =  as.matrix(mtcars$wt),
+              statonly=FALSE)
+glejser.test(mtcars_lm,
+             "wt",
+             mtcars)
